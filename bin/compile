@@ -1,20 +1,26 @@
 #!/usr/bin/env bash
 #
-# This buildpacks allows to run custom commands on the build dyno.
+# This buildpacks allows to run custom Bash file on the build dyno.
 #
-# Example:
-#   heroku config:set BUILDPACK_RUN='./myexec-1:ls -l:bin/myexec-2 foo bar'
-#   git push heroku master
+# Usage:
 #
-# The above example runs the following three commands during the build:
-#   1. ./myexec-1
-#   2. ls -l
-#   3. bin/myexec-2 foo bar
+# Run a single file during the build:
+#     heroku config:set BUILDPACK_RUN=file.sh
+#     git push heroku master
 #
-# Notes:
-#   - If BUILDPACK_RUN is unset, then './buildpack-run.sh' is used by default
-#   - All commands must be executable (i.e. the exec flag must be set)
-#   - If any command exits with a non-zero code, the build is aborted
+# Multiple files:
+#     heroku config:set BUILDPACK_RUN=file1.sh:file2.sh:file3.sh
+#     git push heroku master
+#
+# With arguments:
+#     heroku config:set BUILDPACK_RUN="file1.sh one two:file2.sh 'Hello World'"
+#     git push heroku master
+#
+# If BUILDPACK_RUN is not set, the file buildpack-run.sh is assumed:
+#     vim buildpack-run.sh        
+#     git push heroku master
+# 
+# The working directory for the executed files is the app root directory.
 #
 # ---
 #
@@ -24,54 +30,39 @@
 #   $3: env_dir, directory holding all the app's config vars as files
 #
 # More information here: https://devcenter.heroku.com/articles/buildpack-api
+#
+# Daniel Weibel <daniel@weibeld.net> March 2015 - April 2018
 #------------------------------------------------------------------------------#
 
-# Indent stdin
-i() { sed 's/^/       /'; }
-a() { sed 's/^/-----> /'; }
-I() { sed "s/^/$(printf '\033')[31m       /;s/$/$(printf '\033')[0m/"; }
-A() { sed "s/^/$(printf '\033')[31m-----> /;s/$/$(printf '\033')[0m/"; }
+# Indent text by seven spaces
+i() {
+  sed 's/^/       /'
+}
 
-
-# These environment variables can be accessed from the user-supplied commands
+# These vars can be accessed in the user-supplied scripts
 export BUILD_DIR=$1
 export CACHE_DIR=$2
 export ENV_DIR=$3
 
 cd "$BUILD_DIR"
 
-# Extract commands from BUILDPACK_RUN config variable
+# Get run specification (either BUILDPACK_RUN var or buildpack-run.sh file)
 if [[ -f "$ENV_DIR/BUILDPACK_RUN" ]]; then
-  COMMANDS=$(cat "$ENV_DIR/BUILDPACK_RUN")
+  RUN=$(cat "$ENV_DIR/BUILDPACK_RUN")
 elif [[ -f ./buildpack-run.sh ]]; then
-  COMMANDS=./buildpack-run.sh
+  RUN=./buildpack-run.sh
 else
-  echo "Error: can't apply buildpack." | A
-  echo "You must specify one ore more colon-delimited commands in" | I
-  echo "BUILDPACK_RUN or use the default file ./buildpack-run.sh." | I
-  echo "See https://github.com/weibeld/heroku-buildpack-run#configure." | I
+  echo "Error: can't apply buildpack, because neither the BUILDPACK_RUN" | i
+  echo "config variable, nor the file buildpack-run.sh exists." | i
   echo
   exit 1
 fi
-IFS=':' COMMANDS=($COMMANDS)
 
-# Run commands
-for c in ${COMMANDS[@]}; do
-  # Test if local file is executable (breaking change from previous version)
-  file=$(echo "$c" | cut -f 1 -d " ")
-  if [[ -f "$file" && ! -x "$file" ]]; then
-    echo "Error: $file is not executable."  | A
-    echo "Make it executable by running 'chmod +x $file'" | I
-    echo "on your local machine, then commit and push as usual." | I
-    exit 1
-  fi
-  echo "Running: $c" | a
-  eval "$c"
-  EXIT_CODE=$?
-  if [[ "$EXIT_CODE" != 0 ]]; then
-    echo "Aborting build because '$c' exited with a non-zero code ($EXIT_CODE)" | A
-    exit 1
-  fi
+# Run each of the colon-delimited files (with optional args) with bash
+IFS=':' cmds=($RUN)
+for c in ${cmds[@]}; do
+  echo "Running: bash $c" | sed 's/^/-----> /'
+  eval bash $c
 done
 
 exit 0
